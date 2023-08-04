@@ -1,6 +1,7 @@
-from pyfstab import Fstab
+from fstab import Fstab
 import sys
 import psutil
+import os
 import subprocess
 import argparse
 
@@ -26,37 +27,40 @@ def main():
         sys.exit(1)
     fstab = Fstab()
     with open("/etc/fstab","r") as f:
-        fstab.read_file(f)
+        fstab.read(f)
     found = False
-    #try:
-    for entry in fstab.entries:
-        if entry.device== args.device_name:
-            found = True
-            process_entry(entry)
-    #except ValueError as e:
-     #   print(repr(e))
+    fstab.lines
+    for entry in fstab.lines:
+        if entry.has_filesystem():
+            if entry.device== args.device_name:
+                found = True
+                process_entry(entry)
     if not found:
         print('device '+args.device_name+' not found')
 
 
 def process_entry(entry):
     if contains_tag(entry):
-        current_size_in_bytes=get_current_partition_size(entry.dir)
+        device_name = get_device_name(entry.device)
+        current_size_in_bytes=get_current_volume_size(device_name)
         expected_size,expected_size_in_bytes=parse_tag(entry)
-        print(str(current_size_in_bytes)+'?='+str(expected_size_in_bytes))
         if current_size_in_bytes > expected_size_in_bytes:
-            if is_device_mounted(entry.dir):
+            if is_device_mounted(entry.directory):
                 raise ValueError('device '+entry.device+' is mounted')
-            shrink_volume(entry.device,expected_size)
+            shrink_volume(device_name,expected_size)
         elif current_size_in_bytes < expected_size_in_bytes:
             print("volume "+entry.device+" is already smaller than the expected size")
 
+def get_device_name(device):
+    if device.startswith('UUID='):
+        device_path=os.readlink("/dev/disk/by-uuid/"+device[len('UUID='):])
+        return "/dev"+os.path.realpath(device_path)
+    return device
 
 def get_tag_value(entry):
-    for tag in entry.options.split(','):
+    for tag in entry.options:
         if tag.startswith(SHRINK_TAG+'='):
             return tag[len(SHRINK_TAG+'='):]
-    raise ValueError("tag "+SHRINK_TAG+' not found for device '+entry.device+' in /etc/fstab')
        
 def contains_tag(entry):
     return get_tag_value(entry)!=''
@@ -74,11 +78,9 @@ def is_device_mounted(mount_point):
     return False
 
 
-def get_current_partition_size(mount_point):
-    mount_device(mount_point)
-    size=psutil.disk_usage(mount_point).total
-    umount_device(mount_point)
-    return size
+def get_current_volume_size(device_name):
+    size = subprocess.check_output(["/usr/bin/lsblk","-b",device_name,"-o","SIZE","--noheadings"])
+    return int(size)
 
 def format_bytes(ssize,unit):
     isize=int(ssize)
@@ -91,27 +93,10 @@ def format_bytes(ssize,unit):
         n -= 1
     return isize
 
-def mount_device(mount_point):
-    if not is_device_mounted(mount_point):
-        ret = subprocess.run(["/usr/bin/mount",mount_point])
-        if ret.returncode!=0:
-            raise ValueError("failed to mount "+mount_point)
-
-def umount_device(mount_point):
-    if is_device_mounted(mount_point):
-        ret = subprocess.run(["/usr/bin/umount",mount_point])
-        if ret.returncode!=0:
-            raise ValueError("failed to unmount "+mount_point)
-
-
 def shrink_volume(device_name,new_size):
-    # Execute the file system check before resizing
-    ret = subprocess.run(["/usr/sbin/e2fsck","-f",device_name])
-    if ret.returncode!=0:
-        raise ValueError("failed to run the file system check in device "+device_name)
     # Resize the file system
-    ret = subprocess.run(["/usr/sbin/resize2fs",device_name,new_size])
-    if ret.returncode!=0:
+    ret = subprocess.call(["/usr/sbin/lvreduce","--resizefs","-L",new_size,device_name])
+    if ret!=0:
         raise ValueError("failed to shrink the file system in device "+device_name)
 
 
