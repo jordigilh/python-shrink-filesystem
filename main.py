@@ -31,7 +31,7 @@ def main():
         print("Missing device name argument")
         sys.exit(1)
     fstab = Fstab()
-    with open("/etc/fstab","r",encoding='UTF8') as file:
+    with open("/etc/fstab","r") as file:
         fstab.read(file)
     found = False
     for entry in fstab.lines:
