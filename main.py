@@ -6,11 +6,13 @@ import os
 import sys
 import subprocess
 import argparse
-import psutil
-from fstab import Fstab
+from collections import namedtuple
 
 
 SHRINK_TAG = 'x-systemd.shrinkfs'
+
+fstab_entry = namedtuple("fstab_entry",
+                         "device mount fs_type options dump passno")
 
 
 def init_arguments():
@@ -21,7 +23,7 @@ def init_arguments():
                                      ' in the /etc/fstab entry of the device')
     parser.add_argument('device_name', type=str,
                         help='name of the device as found in the first' +
-                        +' column in the /etc/fstab')
+                        ' column in the /etc/fstab')
     return parser
 
 
@@ -34,15 +36,13 @@ def main():
     if len(args.device_name) == 0:
         print("Missing device name argument")
         sys.exit(1)
-    fstab = Fstab()
     with open("/etc/fstab", "r") as file:
-        fstab.read(file)
+        entries = read_fstab(file.readlines())
     found = False
-    for entry in fstab.lines:
-        if entry.has_filesystem():
-            if entry.device == args.device_name:
-                found = True
-                process_entry(entry)
+    for entry in entries:
+        if entry.device == args.device_name:
+            found = True
+            process_entry(entry)
     if not found:
         print('device '+args.device_name+' not found')
 
@@ -54,12 +54,15 @@ def process_entry(entry):
         current_size_in_bytes = get_current_volume_size(device_name)
         expected_size, expected_size_in_bytes = parse_tag(entry)
         if current_size_in_bytes > expected_size_in_bytes:
-            if is_device_mounted(entry.directory):
-                raise ValueError('device '+entry.device+' is mounted')
+            if not is_block_device(entry.device):
+                raise BlockDeviceException('device ' + entry.device +
+                                           ' is not a block device')
+            if is_device_mounted(entry.device):
+                raise MountException('device '+entry.device+' is mounted')
             shrink_volume(device_name, expected_size)
         elif current_size_in_bytes < expected_size_in_bytes:
             print('volume ' + entry.device + ' is already smaller than' +
-                  +' the expected size')
+                  ' the expected size')
 
 
 def get_device_name(device):
@@ -73,7 +76,7 @@ def get_device_name(device):
 
 def get_tag_value(entry):
     """Returns the value of the x-systemd.shrinkfs if defined in the options"""
-    for tag in entry.options:
+    for tag in entry.options.split(","):
         if tag.startswith(SHRINK_TAG+'='):
             return tag[len(SHRINK_TAG+'='):]
     return ''
@@ -94,12 +97,16 @@ def parse_tag(entry):
     return value, int(format_bytes(value[:len(value)-1], value[len(value)-1:]))
 
 
-def is_device_mounted(mount_point):
+def is_device_mounted(device_name):
     """Returns true if the device is mounted."""
-    for disk_partition in psutil.disk_partitions(True):
-        if disk_partition.mountpoint == mount_point:
-            return True
-    return False
+    return subprocess.call(["/usr/bin/findmnt", "--source", device_name]) == 0
+
+
+def is_block_device(device_name):
+    """Returns true if the device is a block device"""
+    dev_type = subprocess.check_output(["/usr/bin/lsblk", device_name,
+                                        "--noheadings", "-o", "TYPE"])
+    return dev_type.strip() == "lvm"
 
 
 def get_current_volume_size(device_name):
@@ -132,8 +139,39 @@ def shrink_volume(device_name, new_size):
     ret = subprocess.call(["/usr/sbin/lvreduce",
                            "--resizefs", "-L", new_size, device_name])
     if ret != 0:
-        raise ValueError('failed to shrink the' +
-                         + ' file system in device ' + device_name)
+        raise ShrinkException('failed to shrink the' +
+                              ' file system in device ' + device_name)
+
+
+def read_fstab(content):
+    """Reads the content of the fstab and returns a slice containing
+    fstab_entry elements mapping to the entries in the fstab file that
+    refer to a filesystem"""
+    parsed_content = []
+    for line in content:
+        if line.startswith('#') or line.startswith('\n'):
+            continue
+        sliced = line.split()
+        parsed_content.append(
+            fstab_entry(sliced[0],
+                        sliced[1],
+                        sliced[2],
+                        sliced[3],
+                        sliced[4],
+                        sliced[5]))
+    return parsed_content
+
+
+class MountException(Exception):
+    "Raised when a volume is already mounted"
+
+
+class ShrinkException(Exception):
+    "Raised when there is an error shrinking a volume"
+
+
+class BlockDeviceException(Exception):
+    "Raised when the device is not a block device"
 
 
 if __name__ == "__main__":
