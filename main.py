@@ -37,14 +37,11 @@ def main():
         print("Missing device name argument")
         sys.exit(1)
     entries = read_fstab()
-    found = False
     for entry in entries:
         if entry.device == args.device_name:
-            found = True
             process_entry(entry)
-            break
-    if not found:
-        print('device ' + args.device_name + ' not found')
+            sys.exit(0)
+    print('device ' + args.device_name + ' not found')
 
 
 def process_entry(entry):
@@ -70,15 +67,15 @@ def get_device_name(device):
     name in the fstab is defined as a UUID instead of a path in /dev"""
     if device.startswith('UUID='):
         device_path = os.readlink("/dev/disk/by-uuid/"+device[len('UUID='):])
-        return "/dev"+os.path.realpath(device_path)
+        return "/dev" + os.path.realpath(device_path)
     return device
 
 
 def get_tag_value(entry):
     """Returns the value of the x-systemd.shrinkfs if defined in the options"""
     for tag in entry.options.split(","):
-        if tag.startswith(SHRINK_TAG+'='):
-            return tag[len(SHRINK_TAG+'='):]
+        if tag.startswith(SHRINK_TAG + '='):
+            return tag[len(SHRINK_TAG + '='):]
     return ''
 
 
