@@ -36,15 +36,15 @@ def main():
     if len(args.device_name) == 0:
         print("Missing device name argument")
         sys.exit(1)
-    with open("/etc/fstab", "r") as file:
-        entries = read_fstab(file.readlines())
+    entries = read_fstab()
     found = False
     for entry in entries:
         if entry.device == args.device_name:
             found = True
             process_entry(entry)
+            break
     if not found:
-        print('device '+args.device_name+' not found')
+        print('device ' + args.device_name + ' not found')
 
 
 def process_entry(entry):
@@ -54,11 +54,11 @@ def process_entry(entry):
         current_size_in_bytes = get_current_volume_size(device_name)
         expected_size, expected_size_in_bytes = parse_tag(entry)
         if current_size_in_bytes > expected_size_in_bytes:
-            if not is_block_device(entry.device):
+            if not is_lvm(entry.device):
                 raise BlockDeviceException('device ' + entry.device +
                                            ' is not a block device')
             if is_device_mounted(entry.device):
-                raise MountException('device '+entry.device+' is mounted')
+                raise MountException('device ' + entry.device + ' is mounted')
             shrink_volume(device_name, expected_size)
         elif current_size_in_bytes < expected_size_in_bytes:
             print('volume ' + entry.device + ' is already smaller than' +
@@ -102,7 +102,7 @@ def is_device_mounted(device_name):
     return subprocess.call(["/usr/bin/findmnt", "--source", device_name]) == 0
 
 
-def is_block_device(device_name):
+def is_lvm(device_name):
     """Returns true if the device is a block device"""
     dev_type = subprocess.check_output(["/usr/bin/lsblk", device_name,
                                         "--noheadings", "-o", "TYPE"])
@@ -143,23 +143,24 @@ def shrink_volume(device_name, new_size):
                               ' file system in device ' + device_name)
 
 
-def read_fstab(content):
+def read_fstab():
     """Reads the content of the fstab and returns a slice containing
     fstab_entry elements mapping to the entries in the fstab file that
     refer to a filesystem"""
-    parsed_content = []
-    for line in content:
-        if line.startswith('#') or line.startswith('\n'):
-            continue
-        sliced = line.split()
-        parsed_content.append(
-            fstab_entry(sliced[0],
-                        sliced[1],
-                        sliced[2],
-                        sliced[3],
-                        sliced[4],
-                        sliced[5]))
-    return parsed_content
+    with open("/etc/fstab", "r") as file:
+        parsed_content = []
+        for line in file.readlines():
+            if line.startswith('#') or line.startswith('\n'):
+                continue
+            sliced = line.split()
+            parsed_content.append(
+                fstab_entry(sliced[0],
+                            sliced[1],
+                            sliced[2],
+                            sliced[3],
+                            sliced[4],
+                            sliced[5]))
+        return parsed_content
 
 
 class MountException(Exception):
